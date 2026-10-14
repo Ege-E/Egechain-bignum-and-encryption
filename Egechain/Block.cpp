@@ -6,6 +6,96 @@
 #include <sstream>
 #include <utility>
 
+namespace {
+constexpr size_t kMaxScriptLength = 512;
+constexpr size_t kMaxScriptTokens = 128;
+
+bool isSignedIntegerToken(const std::string& token) {
+    if (token.empty()) {
+        return false;
+    }
+
+    size_t begin = 0;
+    if (token[0] == '+' || token[0] == '-') {
+        begin = 1;
+    }
+    if (begin >= token.size()) {
+        return false;
+    }
+
+    for (size_t i = begin; i < token.size(); i++) {
+        const unsigned char ch = static_cast<unsigned char>(token[i]);
+        if (!std::isdigit(ch)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validateDeterministicScript(const std::string& expression, std::string* reason) {
+    if (expression.empty()) {
+        if (reason != nullptr) {
+            *reason = "Transaction amount expression cannot be empty.";
+        }
+        return false;
+    }
+
+    if (expression.size() > kMaxScriptLength) {
+        if (reason != nullptr) {
+            *reason = "Transaction amount expression exceeds deterministic size limit.";
+        }
+        return false;
+    }
+
+    std::string expanded;
+    expanded.reserve(expression.size() * 2);
+    for (char ch : expression) {
+        if (ch == '(' || ch == ')') {
+            expanded.push_back(' ');
+            expanded.push_back(ch);
+            expanded.push_back(' ');
+        } else {
+            expanded.push_back(ch);
+        }
+    }
+
+    std::istringstream stream(expanded);
+    std::vector<std::string> tokens;
+    std::string token;
+    while (stream >> token) {
+        tokens.push_back(token);
+        if (tokens.size() > kMaxScriptTokens) {
+            if (reason != nullptr) {
+                *reason = "Transaction amount expression exceeds deterministic token bound.";
+            }
+            return false;
+        }
+    }
+
+    if (tokens.empty()) {
+        if (reason != nullptr) {
+            *reason = "Transaction amount expression has no tokens.";
+        }
+        return false;
+    }
+
+    for (const std::string& tk : tokens) {
+        if (tk == "(" || tk == ")" || tk == "simplify" || tk == "+" || tk == "-" || tk == "*") {
+            continue;
+        }
+
+        if (!isSignedIntegerToken(tk)) {
+            if (reason != nullptr) {
+                *reason = "Transaction script contains non-deterministic or unsupported token: " + tk;
+            }
+            return false;
+        }
+    }
+
+    return true;
+}
+}
+
 Block::Block(BlockHeader header)
     : header_(std::move(header)) {
 }
@@ -94,6 +184,9 @@ std::string Block::computeBlockHash() const {
                   << transaction.sender << '>'
                   << transaction.receiver << '>'
                   << transaction.amountExpression << '>'
+                  << transaction.nonce << '>'
+                  << transaction.senderPublicKey << '>'
+                  << transaction.signature << '>'
                   << transaction.resolvedAmount << '>'
                   << transaction.transactionHash << '>'
                   << transaction.encryptedTransactionHash;
@@ -106,6 +199,7 @@ bool Block::finalizeTransaction(Transaction& transaction,
                                 LispParser& parser,
                                 const LightweightCrypto& hashCrypto,
                                 std::string* rejectionReason) {
+    (void)parser;
     const auto reject = [&](std::string reason) {
         if (rejectionReason != nullptr) {
             *rejectionReason = std::move(reason);
@@ -116,6 +210,9 @@ bool Block::finalizeTransaction(Transaction& transaction,
     transaction.sender = trim(transaction.sender);
     transaction.receiver = trim(transaction.receiver);
     transaction.amountExpression = trim(transaction.amountExpression);
+    transaction.nonce = trim(transaction.nonce);
+    transaction.senderPublicKey = trim(transaction.senderPublicKey);
+    transaction.signature = trim(transaction.signature);
 
     if (transaction.sender.empty()) {
         return reject("Transaction sender cannot be empty.");
@@ -129,8 +226,14 @@ bool Block::finalizeTransaction(Transaction& transaction,
         return reject("Transaction amount expression cannot be empty.");
     }
 
+    std::string scriptPolicyReason;
+    if (!validateDeterministicScript(transaction.amountExpression, &scriptPolicyReason)) {
+        return reject(scriptPolicyReason);
+    }
+
     try {
-        const Bignum evaluatedAmount = parser.parseAndEvaluate(transaction.amountExpression);
+        LispParser deterministicParser;
+        const Bignum evaluatedAmount = deterministicParser.parseAndEvaluate(transaction.amountExpression);
         transaction.resolvedAmount = evaluatedAmount.toSignedDecimalString();
     } catch (const std::exception& e) {
         return reject(std::string("Transaction amount expression could not be parsed: ") + e.what());
@@ -205,6 +308,9 @@ std::string Block::canonicalTransactionText(const Transaction& transaction) {
     return transaction.sender + "|" +
            transaction.receiver + "|" +
            transaction.amountExpression + "|" +
+           transaction.nonce + "|" +
+           transaction.senderPublicKey + "|" +
+           transaction.signature + "|" +
            transaction.resolvedAmount;
 }
 

@@ -1,6 +1,7 @@
 #include "Node.h"
 
 #include "LispParser.h"
+#include "Wallet.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -136,6 +137,13 @@ bool EgechainNode::submitTransaction(Transaction transaction, std::string* rejec
         return false;
     }
 
+    if (trim(transaction.nonce).empty()) {
+        if (rejectionReason != nullptr) {
+            *rejectionReason = "Signed transaction nonce cannot be empty.";
+        }
+        return false;
+    }
+
     LispParser parser;
     LightweightCrypto crypto;
     if (!Block::finalizeTransaction(transaction, parser, crypto, rejectionReason)) {
@@ -201,6 +209,7 @@ bool EgechainNode::mineBlock(const std::string& minerAccount,
     reward.sender = kSystemAccount;
     reward.receiver = trim(minerAccount);
     reward.amountExpression = config_.miningReward;
+    reward.nonce = "0";
 
     LispParser parser;
     LightweightCrypto crypto;
@@ -385,6 +394,9 @@ bool EgechainNode::saveToDisk(const std::string& path, std::string* error) const
             if (!writeSizedField(output, transaction.sender) ||
                 !writeSizedField(output, transaction.receiver) ||
                 !writeSizedField(output, transaction.amountExpression) ||
+                !writeSizedField(output, transaction.nonce) ||
+                !writeSizedField(output, transaction.senderPublicKey) ||
+                !writeSizedField(output, transaction.signature) ||
                 !writeSizedField(output, transaction.resolvedAmount) ||
                 !writeSizedField(output, transaction.transactionHash) ||
                 !writeSizedField(output, transaction.encryptedTransactionHash)) {
@@ -407,6 +419,9 @@ bool EgechainNode::saveToDisk(const std::string& path, std::string* error) const
         if (!writeSizedField(output, transaction.sender) ||
             !writeSizedField(output, transaction.receiver) ||
             !writeSizedField(output, transaction.amountExpression) ||
+            !writeSizedField(output, transaction.nonce) ||
+            !writeSizedField(output, transaction.senderPublicKey) ||
+            !writeSizedField(output, transaction.signature) ||
             !writeSizedField(output, transaction.resolvedAmount) ||
             !writeSizedField(output, transaction.transactionHash) ||
             !writeSizedField(output, transaction.encryptedTransactionHash)) {
@@ -564,6 +579,9 @@ bool EgechainNode::loadFromDisk(const std::string& path, std::string* error) {
                 if (!readSizedField(input, tx.sender) ||
                     !readSizedField(input, tx.receiver) ||
                     !readSizedField(input, tx.amountExpression) ||
+                    !readSizedField(input, tx.nonce) ||
+                    !readSizedField(input, tx.senderPublicKey) ||
+                    !readSizedField(input, tx.signature) ||
                     !readSizedField(input, tx.resolvedAmount) ||
                     !readSizedField(input, tx.transactionHash) ||
                     !readSizedField(input, tx.encryptedTransactionHash)) {
@@ -597,6 +615,9 @@ bool EgechainNode::loadFromDisk(const std::string& path, std::string* error) {
             if (!readSizedField(input, tx.sender) ||
                 !readSizedField(input, tx.receiver) ||
                 !readSizedField(input, tx.amountExpression) ||
+                !readSizedField(input, tx.nonce) ||
+                !readSizedField(input, tx.senderPublicKey) ||
+                !readSizedField(input, tx.signature) ||
                 !readSizedField(input, tx.resolvedAmount) ||
                 !readSizedField(input, tx.transactionHash) ||
                 !readSizedField(input, tx.encryptedTransactionHash)) {
@@ -926,6 +947,37 @@ bool EgechainNode::validateAndApplyTransaction(const Transaction& transaction,
     if (sender == kSystemAccount) {
         balances[receiver] = addUnsignedDecimal(balances[receiver].empty() ? "0" : balances[receiver], amount);
         return true;
+    }
+
+    std::string normalizedNonce;
+    if (!parseStrictPositiveDecimal(transaction.nonce, normalizedNonce)) {
+        if (rejectionReason != nullptr) {
+            *rejectionReason = "Transaction nonce must be a strictly positive decimal value.";
+        }
+        return false;
+    }
+
+    if (transaction.senderPublicKey.empty()) {
+        if (rejectionReason != nullptr) {
+            *rejectionReason = "Transaction sender public key is missing.";
+        }
+        return false;
+    }
+
+    const std::string derivedSender = Wallet::deriveAddress(transaction.senderPublicKey);
+    if (derivedSender != sender) {
+        if (rejectionReason != nullptr) {
+            *rejectionReason = "Transaction sender does not match sender public key.";
+        }
+        return false;
+    }
+
+    std::string signatureReason;
+    if (!Wallet::verifyTransactionSignature(transaction, &signatureReason)) {
+        if (rejectionReason != nullptr) {
+            *rejectionReason = "Transaction signature verification failed: " + signatureReason;
+        }
+        return false;
     }
 
     const std::string currentSenderBalance = balances[sender].empty() ? "0" : balances[sender];

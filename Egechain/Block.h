@@ -12,6 +12,9 @@ struct Transaction {
     std::string sender;
     std::string receiver;
     std::string amountExpression;
+    std::string nonce;
+    std::string senderPublicKey;
+    std::string signature;
     std::string resolvedAmount;
     std::string transactionHash;
     std::string encryptedTransactionHash;

@@ -1,8 +1,11 @@
 #include "Block.h"
 #include "LightweightCrypto.h"
 #include "LispParser.h"
+#include "Network.h"
 #include "Node.h"
+#include "Wallet.h"
 
+#include <algorithm>
 #include <cassert>
 #include <ctime>
 #include <filesystem>
@@ -127,25 +130,33 @@ static void runPhase2SelfChecks() {
     config.maxTransactionsPerBlock = 16;
 
     std::string reason;
+    std::string signError;
+
+    const WalletKeyPair aliceWallet = Wallet::generateKeyPair();
+    const WalletKeyPair bobWallet = Wallet::generateKeyPair();
+    const WalletKeyPair carolWallet = Wallet::generateKeyPair();
 
     EgechainNode node(config);
-    assert(node.createGenesis("alice", "1000", 1730000010, &reason));
+    assert(node.createGenesis(aliceWallet.address, "1000", 1730000010, &reason));
     assert(reason.empty());
-    assert(node.balanceOf("alice") == "1000");
+    assert(node.balanceOf(aliceWallet.address) == "1000");
 
-    Transaction tx1{"alice", "bob", "(simplify (+ 40 2))", "", "", ""};
+    Transaction tx1{aliceWallet.address, bobWallet.address, "(simplify (+ 40 2))", "1", aliceWallet.publicKey, "", "", "", ""};
+    assert(Wallet::signTransaction(tx1, aliceWallet.privateKey, &signError));
     assert(node.submitTransaction(tx1, &reason));
 
-    Transaction duplicateTx{"alice", "bob", "(simplify (+ 40 2))", "", "", ""};
+    Transaction duplicateTx{aliceWallet.address, bobWallet.address, "(simplify (+ 40 2))", "1", aliceWallet.publicKey, "", "", "", ""};
+    assert(Wallet::signTransaction(duplicateTx, aliceWallet.privateKey, &signError));
     assert(!node.submitTransaction(duplicateTx, &reason));
 
-    Transaction overspendPending{"alice", "carol", "960", "", "", ""};
+    Transaction overspendPending{aliceWallet.address, carolWallet.address, "960", "2", aliceWallet.publicKey, "", "", "", ""};
+    assert(Wallet::signTransaction(overspendPending, aliceWallet.privateKey, &signError));
     assert(!node.submitTransaction(overspendPending, &reason));
 
     Block mined;
     assert(node.mineBlock("miner1", 1730000020, &mined, &reason));
-    assert(node.balanceOf("alice") == "958");
-    assert(node.balanceOf("bob") == "42");
+    assert(node.balanceOf(aliceWallet.address) == "958");
+    assert(node.balanceOf(bobWallet.address) == "42");
     assert(node.balanceOf("miner1") == "50");
     assert(node.mempoolSize() == 0);
 
@@ -168,7 +179,7 @@ static void runPhase2SelfChecks() {
     EgechainNode branchB(config);
     EgechainNode aggregator(config);
 
-    assert(aggregator.createGenesis("alice", "1000", 1730000100, &reason));
+    assert(aggregator.createGenesis(aliceWallet.address, "1000", 1730000100, &reason));
     const Block sharedGenesis = aggregator.canonicalChain().front();
     assert(branchA.acceptBlock(sharedGenesis, &reason));
     assert(branchB.acceptBlock(sharedGenesis, &reason));
@@ -185,7 +196,8 @@ static void runPhase2SelfChecks() {
     assert(aggregator.acceptBlock(b2, &reason));
     assert(aggregator.chainHeight() == 2);
 
-    Transaction pending{"alice", "dave", "5", "", "", ""};
+    Transaction pending{aliceWallet.address, "dave", "5", "3", aliceWallet.publicKey, "", "", "", ""};
+    assert(Wallet::signTransaction(pending, aliceWallet.privateKey, &signError));
     assert(aggregator.submitTransaction(pending, &reason));
 
     const std::filesystem::path persistencePath =
@@ -197,7 +209,7 @@ static void runPhase2SelfChecks() {
     EgechainNode loaded;
     assert(loaded.loadFromDisk(persistencePath.string(), &persistenceError));
     assert(loaded.chainHeight() == aggregator.chainHeight());
-    assert(loaded.balanceOf("alice") == aggregator.balanceOf("alice"));
+    assert(loaded.balanceOf(aliceWallet.address) == aggregator.balanceOf(aliceWallet.address));
     assert(loaded.mempoolSize() == aggregator.mempoolSize());
 
     std::ofstream corrupted(persistencePath, std::ios::trunc);
@@ -208,6 +220,87 @@ static void runPhase2SelfChecks() {
     assert(!brokenLoad.loadFromDisk(persistencePath.string(), &persistenceError));
 
     std::filesystem::remove(persistencePath);
+}
+
+static void runPhase3SelfChecks() {
+    ConsensusConfig config;
+    config.powDifficulty = 1;
+    config.miningReward = "25";
+    config.maxTransactionsPerBlock = 8;
+
+    WalletKeyPair alice = Wallet::generateKeyPair();
+    WalletKeyPair bob = Wallet::generateKeyPair();
+    WalletKeyPair miner = Wallet::generateKeyPair();
+
+    EgechainNode nodeA(config);
+    EgechainNode nodeB(config);
+    EgechainNode nodeC(config);
+    EgechainNode nodeLate(config);
+
+    P2PNetwork network;
+    assert(network.registerNode("A", &nodeA));
+    assert(network.registerNode("B", &nodeB));
+    assert(network.registerNode("C", &nodeC));
+    assert(network.registerNode("L", &nodeLate));
+    assert(network.connectPeers("A", "B"));
+    assert(network.connectPeers("B", "C"));
+
+    const std::vector<std::string> discovered = network.discoverPeers("A");
+    assert(std::find(discovered.begin(), discovered.end(), "A") != discovered.end());
+    assert(std::find(discovered.begin(), discovered.end(), "B") != discovered.end());
+    assert(std::find(discovered.begin(), discovered.end(), "C") != discovered.end());
+
+    std::string reason;
+    assert(nodeA.createGenesis(alice.address, "500", 1731000000, &reason));
+    assert(reason.empty());
+
+    const Block genesis = nodeA.canonicalChain().front();
+    std::vector<std::string> gossipErrors;
+    const size_t gossipGenesisAccepted = network.gossipBlock("A", genesis, &gossipErrors);
+    assert(gossipGenesisAccepted >= 2);
+
+    Transaction signedTx{alice.address, bob.address, "(simplify (+ 6 4))", "1", alice.publicKey, "", "", "", ""};
+    std::string signError;
+    assert(Wallet::signTransaction(signedTx, alice.privateKey, &signError));
+    assert(nodeA.submitTransaction(signedTx, &reason));
+
+    gossipErrors.clear();
+    const size_t txAccepted = network.gossipTransaction("A", signedTx, &gossipErrors);
+    assert(txAccepted >= 2);
+
+    Block minedOnC;
+    assert(nodeC.mineBlock(miner.address, 1731000010, &minedOnC, &reason));
+    gossipErrors.clear();
+    const size_t blockAccepted = network.gossipBlock("C", minedOnC, &gossipErrors);
+    assert(blockAccepted >= 2);
+
+    assert(nodeA.balanceOf(alice.address) == "490");
+    assert(nodeB.balanceOf(alice.address) == "490");
+    assert(nodeC.balanceOf(alice.address) == "490");
+    assert(nodeA.balanceOf(bob.address) == "10");
+    assert(nodeB.balanceOf(bob.address) == "10");
+    assert(nodeC.balanceOf(bob.address) == "10");
+
+    Transaction badSignature{alice.address, bob.address, "7", "2", alice.publicKey, "wsig1:broken", "", "", ""};
+    assert(!nodeA.submitTransaction(badSignature, &reason));
+
+    Transaction nonDeterministic{alice.address, bob.address, "(declare-const tower 5)", "2", alice.publicKey, "", "", "", ""};
+    assert(Wallet::signTransaction(nonDeterministic, alice.privateKey, &signError));
+    assert(!nodeA.submitTransaction(nonDeterministic, &reason));
+
+    std::string hugeExpression = "(simplify (+";
+    for (int i = 0; i < 200; i++) {
+        hugeExpression += " 1";
+    }
+    hugeExpression += "))";
+    Transaction unbounded{alice.address, bob.address, hugeExpression, "2", alice.publicKey, "", "", "", ""};
+    assert(Wallet::signTransaction(unbounded, alice.privateKey, &signError));
+    assert(!nodeA.submitTransaction(unbounded, &reason));
+
+    std::string syncError;
+    assert(network.syncNode("L", "B", &syncError));
+    assert(nodeLate.chainHeight() == nodeB.chainHeight());
+    assert(nodeLate.tipHash() == nodeB.tipHash());
 }
 
 static int runParserFileMode() {
