@@ -3,6 +3,7 @@
 #include "LispParser.h"
 
 #include <cctype>
+#include <sstream>
 #include <utility>
 
 Block::Block(BlockHeader header)
@@ -13,7 +14,15 @@ const BlockHeader& Block::header() const {
     return header_;
 }
 
+BlockHeader& Block::mutableHeader() {
+    return header_;
+}
+
 const BlockBody& Block::body() const {
+    return body_;
+}
+
+BlockBody& Block::mutableBody() {
     return body_;
 }
 
@@ -34,6 +43,69 @@ void Block::addHashEncryptionPhase(HashEncryptionPhase phase) {
 }
 
 bool Block::acceptTransaction(Transaction transaction, LispParser& parser, std::string* rejectionReason) {
+    if (!finalizeTransaction(transaction, parser, hashCrypto_, rejectionReason)) {
+        return false;
+    }
+
+    body_.transactions.push_back(std::move(transaction));
+    return true;
+}
+
+std::string Block::computeMerkleRoot() const {
+    if (body_.transactions.empty()) {
+        return LightweightCrypto::hashString("empty");
+    }
+
+    std::vector<std::string> layer;
+    layer.reserve(body_.transactions.size());
+    for (const Transaction& transaction : body_.transactions) {
+        layer.push_back(transaction.transactionHash.empty()
+                            ? LightweightCrypto::hashString(canonicalTransactionText(transaction))
+                            : transaction.transactionHash);
+    }
+
+    while (layer.size() > 1) {
+        std::vector<std::string> nextLayer;
+        nextLayer.reserve((layer.size() + 1) / 2);
+
+        for (size_t i = 0; i < layer.size(); i += 2) {
+            const std::string& left = layer[i];
+            const std::string& right = (i + 1 < layer.size()) ? layer[i + 1] : layer[i];
+            nextLayer.push_back(LightweightCrypto::hashString(left + "|" + right));
+        }
+
+        layer = std::move(nextLayer);
+    }
+
+    return layer.front();
+}
+
+std::string Block::computeBlockHash() const {
+    std::ostringstream canonical;
+    canonical << header_.index << '|'
+              << header_.previousBlockHash << '|'
+              << header_.merkleRoot << '|'
+              << header_.timestampUnix << '|'
+              << header_.nonce << '|'
+              << header_.difficulty;
+
+    for (const Transaction& transaction : body_.transactions) {
+        canonical << '|'
+                  << transaction.sender << '>'
+                  << transaction.receiver << '>'
+                  << transaction.amountExpression << '>'
+                  << transaction.resolvedAmount << '>'
+                  << transaction.transactionHash << '>'
+                  << transaction.encryptedTransactionHash;
+    }
+
+    return LightweightCrypto::hashString(canonical.str());
+}
+
+bool Block::finalizeTransaction(Transaction& transaction,
+                                LispParser& parser,
+                                const LightweightCrypto& hashCrypto,
+                                std::string* rejectionReason) {
     const auto reject = [&](std::string reason) {
         if (rejectionReason != nullptr) {
             *rejectionReason = std::move(reason);
@@ -70,7 +142,7 @@ bool Block::acceptTransaction(Transaction transaction, LispParser& parser, std::
 
     try {
         transaction.transactionHash = LightweightCrypto::hashString(canonicalTransactionText(transaction));
-        transaction.encryptedTransactionHash = hashCrypto_.encryptHash(transaction.transactionHash);
+        transaction.encryptedTransactionHash = hashCrypto.encryptHash(transaction.transactionHash);
     } catch (const std::exception& e) {
         return reject(std::string("Transaction hash encryption failed: ") + e.what());
     }
@@ -79,7 +151,53 @@ bool Block::acceptTransaction(Transaction transaction, LispParser& parser, std::
         rejectionReason->clear();
     }
 
-    body_.transactions.push_back(std::move(transaction));
+    return true;
+}
+
+bool Block::verifyTransaction(const Transaction& transaction, LispParser& parser, std::string* rejectionReason) {
+    Transaction recomputed = transaction;
+    recomputed.transactionHash.clear();
+    recomputed.encryptedTransactionHash.clear();
+
+    LightweightCrypto crypto;
+    if (!finalizeTransaction(recomputed, parser, crypto, rejectionReason)) {
+        return false;
+    }
+
+    if (recomputed.resolvedAmount != transaction.resolvedAmount) {
+        if (rejectionReason != nullptr) {
+            *rejectionReason = "Transaction resolved amount does not match expression.";
+        }
+        return false;
+    }
+
+    if (recomputed.transactionHash != transaction.transactionHash) {
+        if (rejectionReason != nullptr) {
+            *rejectionReason = "Transaction hash does not match canonical payload.";
+        }
+        return false;
+    }
+
+    try {
+        LightweightCrypto decryptor;
+        const std::string decrypted = decryptor.decryptHash(transaction.encryptedTransactionHash);
+        if (decrypted != transaction.transactionHash) {
+            if (rejectionReason != nullptr) {
+                *rejectionReason = "Encrypted transaction hash does not decrypt to transaction hash.";
+            }
+            return false;
+        }
+    } catch (const std::exception& e) {
+        if (rejectionReason != nullptr) {
+            *rejectionReason = std::string("Encrypted transaction hash is invalid: ") + e.what();
+        }
+        return false;
+    }
+
+    if (rejectionReason != nullptr) {
+        rejectionReason->clear();
+    }
+
     return true;
 }
 

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.3)
+cmake_minimum_required(VERSION 3.20)
 project(Egechain)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -9,4 +9,4 @@ add_executable(Egechain
         LispParser.cpp
         Block.cpp
         LightweightCrypto.cpp
-        LightweightCrypto.cpp)
+        Node.cpp)

@@ -35,7 +35,9 @@ public:
     explicit Block(BlockHeader header = {});
 
     [[nodiscard]] const BlockHeader& header() const;
+    [[nodiscard]] BlockHeader& mutableHeader();
     [[nodiscard]] const BlockBody& body() const;
+    [[nodiscard]] BlockBody& mutableBody();
     [[nodiscard]] size_t transactionCount() const;
     [[nodiscard]] const HashEncryptionProfile& hashEncryptionProfile() const;
 
@@ -43,6 +45,14 @@ public:
     void addHashEncryptionPhase(HashEncryptionPhase phase);
 
     bool acceptTransaction(Transaction transaction, LispParser& parser, std::string* rejectionReason = nullptr);
+    [[nodiscard]] std::string computeMerkleRoot() const;
+    [[nodiscard]] std::string computeBlockHash() const;
+
+    static bool finalizeTransaction(Transaction& transaction,
+                                    LispParser& parser,
+                                    const LightweightCrypto& hashCrypto,
+                                    std::string* rejectionReason = nullptr);
+    static bool verifyTransaction(const Transaction& transaction, LispParser& parser, std::string* rejectionReason = nullptr);
 
 private:
     static std::string canonicalTransactionText(const Transaction& transaction);

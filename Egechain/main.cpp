@@ -1,15 +1,18 @@
 #include "Block.h"
 #include "LightweightCrypto.h"
 #include "LispParser.h"
+#include "Node.h"
 
 #include <cassert>
+#include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 
-static void runSelfChecks() {
+static void runPhase1SelfChecks() {
     Bignum helper("1");
     Bignum target("12345");
 
@@ -117,9 +120,97 @@ static void runSelfChecks() {
     assert(!block.acceptTransaction(tx4, parser, &rejectionReason));
 }
 
-int main() {
-    runSelfChecks();
+static void runPhase2SelfChecks() {
+    ConsensusConfig config;
+    config.powDifficulty = 1;
+    config.miningReward = "50";
+    config.maxTransactionsPerBlock = 16;
 
+    std::string reason;
+
+    EgechainNode node(config);
+    assert(node.createGenesis("alice", "1000", 1730000010, &reason));
+    assert(reason.empty());
+    assert(node.balanceOf("alice") == "1000");
+
+    Transaction tx1{"alice", "bob", "(simplify (+ 40 2))", "", "", ""};
+    assert(node.submitTransaction(tx1, &reason));
+
+    Transaction duplicateTx{"alice", "bob", "(simplify (+ 40 2))", "", "", ""};
+    assert(!node.submitTransaction(duplicateTx, &reason));
+
+    Transaction overspendPending{"alice", "carol", "960", "", "", ""};
+    assert(!node.submitTransaction(overspendPending, &reason));
+
+    Block mined;
+    assert(node.mineBlock("miner1", 1730000020, &mined, &reason));
+    assert(node.balanceOf("alice") == "958");
+    assert(node.balanceOf("bob") == "42");
+    assert(node.balanceOf("miner1") == "50");
+    assert(node.mempoolSize() == 0);
+
+    Block invalidLink = mined;
+    invalidLink.mutableHeader().previousBlockHash = "bad_hash";
+    assert(!node.acceptBlock(invalidLink, &reason));
+
+    Block invalidPow = mined;
+    invalidPow.mutableHeader().previousBlockHash = node.tipHash();
+    invalidPow.mutableHeader().index = node.chainHeight() + 1;
+    invalidPow.mutableHeader().timestampUnix = 1730000030;
+    invalidPow.mutableHeader().merkleRoot = invalidPow.computeMerkleRoot();
+    invalidPow.mutableHeader().nonce = 0;
+    while (invalidPow.computeBlockHash().starts_with("0")) {
+        invalidPow.mutableHeader().nonce++;
+    }
+    assert(!node.acceptBlock(invalidPow, &reason));
+
+    EgechainNode branchA(config);
+    EgechainNode branchB(config);
+    EgechainNode aggregator(config);
+
+    assert(aggregator.createGenesis("alice", "1000", 1730000100, &reason));
+    const Block sharedGenesis = aggregator.canonicalChain().front();
+    assert(branchA.acceptBlock(sharedGenesis, &reason));
+    assert(branchB.acceptBlock(sharedGenesis, &reason));
+
+    Block a1;
+    Block b1;
+    Block b2;
+    assert(branchA.mineBlock("minerA", 1730000110, &a1, &reason));
+    assert(branchB.mineBlock("minerB", 1730000110, &b1, &reason));
+    assert(branchB.mineBlock("minerB", 1730000120, &b2, &reason));
+
+    assert(aggregator.acceptBlock(a1, &reason));
+    assert(aggregator.acceptBlock(b1, &reason));
+    assert(aggregator.acceptBlock(b2, &reason));
+    assert(aggregator.chainHeight() == 2);
+
+    Transaction pending{"alice", "dave", "5", "", "", ""};
+    assert(aggregator.submitTransaction(pending, &reason));
+
+    const std::filesystem::path persistencePath =
+        std::filesystem::temp_directory_path() / "egechain_phase2_state.dat";
+    std::string persistenceError;
+    assert(aggregator.saveToDisk(persistencePath.string(), &persistenceError));
+    assert(persistenceError.empty());
+
+    EgechainNode loaded;
+    assert(loaded.loadFromDisk(persistencePath.string(), &persistenceError));
+    assert(loaded.chainHeight() == aggregator.chainHeight());
+    assert(loaded.balanceOf("alice") == aggregator.balanceOf("alice"));
+    assert(loaded.mempoolSize() == aggregator.mempoolSize());
+
+    std::ofstream corrupted(persistencePath, std::ios::trunc);
+    corrupted << "bad data";
+    corrupted.close();
+
+    EgechainNode brokenLoad;
+    assert(!brokenLoad.loadFromDisk(persistencePath.string(), &persistenceError));
+
+    std::filesystem::remove(persistencePath);
+}
+
+static int runParserFileMode() {
     LispParser parser;
     const std::string fileName = "src/expressions.txt";
 
@@ -144,4 +235,158 @@ int main() {
     }
 
     return 0;
+}
+
+static int runNodeMode(const std::string& persistencePath) {
+    ConsensusConfig config;
+    EgechainNode node(config);
+
+    std::string error;
+    if (!persistencePath.empty()) {
+        (void)node.loadFromDisk(persistencePath, &error);
+    }
+
+    std::cout << "Egechain Phase 2 node mode. Commands:\n"
+              << "  genesis <recipient> <amountExpr>\n"
+              << "  tx <sender> <receiver> <amountExpr>\n"
+              << "  mine <miner>\n"
+              << "  balance <account>\n"
+              << "  chain\n"
+              << "  save <path>\n"
+              << "  load <path>\n"
+              << "  exit\n";
+
+    std::string line;
+    while (std::getline(std::cin, line)) {
+        std::istringstream input(line);
+        std::string command;
+        input >> command;
+
+        if (command == "" || command == "#") {
+            continue;
+        }
+
+        if (command == "exit") {
+            break;
+        }
+
+        if (command == "genesis") {
+            std::string recipient;
+            input >> recipient;
+            std::string amountExpression;
+            std::getline(input, amountExpression);
+            if (!amountExpression.empty() && amountExpression.front() == ' ') {
+                amountExpression.erase(amountExpression.begin());
+            }
+
+            std::string reason;
+            if (node.createGenesis(recipient, amountExpression, static_cast<uint64_t>(std::time(nullptr)), &reason)) {
+                std::cout << "genesis accepted: tip=" << node.tipHash() << std::endl;
+            } else {
+                std::cout << "genesis rejected: " << reason << std::endl;
+            }
+            continue;
+        }
+
+        if (command == "tx") {
+            std::string sender;
+            std::string receiver;
+            input >> sender >> receiver;
+            std::string amountExpression;
+            std::getline(input, amountExpression);
+            if (!amountExpression.empty() && amountExpression.front() == ' ') {
+                amountExpression.erase(amountExpression.begin());
+            }
+
+            Transaction tx{sender, receiver, amountExpression, "", "", ""};
+            std::string reason;
+            if (node.submitTransaction(tx, &reason)) {
+                std::cout << "transaction accepted, mempool=" << node.mempoolSize() << std::endl;
+            } else {
+                std::cout << "transaction rejected: " << reason << std::endl;
+            }
+            continue;
+        }
+
+        if (command == "mine") {
+            std::string miner;
+            input >> miner;
+
+            std::string reason;
+            Block mined;
+            if (node.mineBlock(miner, static_cast<uint64_t>(std::time(nullptr)), &mined, &reason)) {
+                std::cout << "block mined: index=" << mined.header().index
+                          << " hash=" << mined.computeBlockHash() << std::endl;
+            } else {
+                std::cout << "mine failed: " << reason << std::endl;
+            }
+            continue;
+        }
+
+        if (command == "balance") {
+            std::string account;
+            input >> account;
+            std::cout << account << "=" << node.balanceOf(account) << std::endl;
+            continue;
+        }
+
+        if (command == "chain") {
+            const std::vector<Block> chain = node.canonicalChain();
+            std::cout << "height=" << node.chainHeight() << " blocks=" << chain.size() << std::endl;
+            for (const Block& block : chain) {
+                std::cout << "  index=" << block.header().index
+                          << " hash=" << block.computeBlockHash()
+                          << " prev=" << block.header().previousBlockHash
+                          << " txs=" << block.transactionCount() << std::endl;
+            }
+            continue;
+        }
+
+        if (command == "save") {
+            std::string path;
+            input >> path;
+            std::string saveError;
+            if (node.saveToDisk(path, &saveError)) {
+                std::cout << "saved: " << path << std::endl;
+            } else {
+                std::cout << "save failed: " << saveError << std::endl;
+            }
+            continue;
+        }
+
+        if (command == "load") {
+            std::string path;
+            input >> path;
+            std::string loadError;
+            if (node.loadFromDisk(path, &loadError)) {
+                std::cout << "loaded: " << path << std::endl;
+            } else {
+                std::cout << "load failed: " << loadError << std::endl;
+            }
+            continue;
+        }
+
+        std::cout << "Unknown command: " << command << std::endl;
+    }
+
+    if (!persistencePath.empty()) {
+        std::string saveError;
+        if (!node.saveToDisk(persistencePath, &saveError)) {
+            std::cerr << "Failed to save state on exit: " << saveError << std::endl;
+        }
+    }
+
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    runPhase1SelfChecks();
+    runPhase2SelfChecks();
+
+    if (argc >= 2 && std::string(argv[1]) == "node") {
+        const std::string persistencePath = (argc >= 3) ? argv[2] : "egechain_state.dat";
+        return runNodeMode(persistencePath);
+    }
+
+    return runParserFileMode();
 }
