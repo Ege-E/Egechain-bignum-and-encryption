@@ -1,0 +1,32 @@
+[
+{
+  "directory": "/Users/egeertugrul/CLionProjects/Egechain/cmake-build-debug",
+  "command": "/usr/bin/c++ -g -std=gnu++20 -arch arm64 -fcolor-diagnostics -o CMakeFiles/Egechain.dir/main.cpp.o -c /Users/egeertugrul/CLionProjects/Egechain/main.cpp",
+  "file": "/Users/egeertugrul/CLionProjects/Egechain/main.cpp",
+  "output": "/Users/egeertugrul/CLionProjects/Egechain/cmake-build-debug/CMakeFiles/Egechain.dir/main.cpp.o"
+},
+{
+  "directory": "/Users/egeertugrul/CLionProjects/Egechain/cmake-build-debug",
+  "command": "/usr/bin/c++ -g -std=gnu++20 -arch arm64 -fcolor-diagnostics -o CMakeFiles/Egechain.dir/Bignum.cpp.o -c /Users/egeertugrul/CLionProjects/Egechain/Bignum.cpp",
+  "file": "/Users/egeertugrul/CLionProjects/Egechain/Bignum.cpp",
+  "output": "/Users/egeertugrul/CLionProjects/Egechain/cmake-build-debug/CMakeFiles/Egechain.dir/Bignum.cpp.o"
+},
+{
+  "directory": "/Users/egeertugrul/CLionProjects/Egechain/cmake-build-debug",
+  "command": "/usr/bin/c++ -g -std=gnu++20 -arch arm64 -fcolor-diagnostics -o CMakeFiles/Egechain.dir/LispParser.cpp.o -c /Users/egeertugrul/CLionProjects/Egechain/LispParser.cpp",
+  "file": "/Users/egeertugrul/CLionProjects/Egechain/LispParser.cpp",
+  "output": "/Users/egeertugrul/CLionProjects/Egechain/cmake-build-debug/CMakeFiles/Egechain.dir/LispParser.cpp.o"
+},
+{
+  "directory": "/Users/egeertugrul/CLionProjects/Egechain/cmake-build-debug",
+  "command": "/usr/bin/c++ -g -std=gnu++20 -arch arm64 -fcolor-diagnostics -o CMakeFiles/Egechain.dir/Block.cpp.o -c /Users/egeertugrul/CLionProjects/Egechain/Block.cpp",
+  "file": "/Users/egeertugrul/CLionProjects/Egechain/Block.cpp",
+  "output": "/Users/egeertugrul/CLionProjects/Egechain/cmake-build-debug/CMakeFiles/Egechain.dir/Block.cpp.o"
+},
+{
+  "directory": "/Users/egeertugrul/CLionProjects/Egechain/cmake-build-debug",
+  "command": "/usr/bin/c++ -g -std=gnu++20 -arch arm64 -fcolor-diagnostics -o CMakeFiles/Egechain.dir/LightweightCrypto.cpp.o -c /Users/egeertugrul/CLionProjects/Egechain/LightweightCrypto.cpp",
+  "file": "/Users/egeertugrul/CLionProjects/Egechain/LightweightCrypto.cpp",
+  "output": "/Users/egeertugrul/CLionProjects/Egechain/cmake-build-debug/CMakeFiles/Egechain.dir/LightweightCrypto.cpp.o"
+}
+]
