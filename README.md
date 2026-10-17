@@ -2,6 +2,11 @@
 
 Egechain Phase I + Phase II prototype in C++.
 
+Checklist before Phase III:
+> Need novel solution to generate key pairs in Wallet.cpp
+> Within serializing private keys, I need someone smarter than I am.
+> The gossip network needs to be redone before implementing P2P. 
+
 ## What is implemented
 
 ### Phase I (existing)
@@ -18,6 +23,8 @@ Egechain Phase I + Phase II prototype in C++.
 - **Mempool:** pending transaction queue with pre-validation, duplicate prevention, and aggregate overspend prevention against tip state
 - **Persistence:** chain + mempool + consensus config saved with sized fields, strict parsing, malformed-file rejection, and atomic write via `*.tmp` rename
 - **Node lifecycle API:** integrated `EgechainNode` and a CLI node mode
+
+
 
 ## Build
 
