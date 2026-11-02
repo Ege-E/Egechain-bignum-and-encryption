@@ -86,7 +86,7 @@ size_t P2PNetwork::gossipTransaction(const std::string& originPeerId,
             continue;
         }
 
-        for (const std::string& neighbor : adjacencyIt->second) {
+        for (const std::string& neighbor : rankedNeighbors(current)) {
             if (!visited.insert(neighbor).second) {
                 continue;
             }
@@ -120,6 +120,8 @@ size_t P2PNetwork::gossipBlock(const std::string& originPeerId,
         return 0;
     }
 
+    recordBlockAttempt(originPeerId, block.header().timestampUnix);
+
     std::unordered_set<std::string> visited;
     std::queue<std::string> pending;
     visited.insert(originPeerId);
@@ -136,7 +138,7 @@ size_t P2PNetwork::gossipBlock(const std::string& originPeerId,
             continue;
         }
 
-        for (const std::string& neighbor : adjacencyIt->second) {
+        for (const std::string& neighbor : rankedNeighbors(current)) {
             if (!visited.insert(neighbor).second) {
                 continue;
             }
@@ -191,4 +193,56 @@ bool P2PNetwork::syncNode(const std::string& targetPeerId,
         error->clear();
     }
     return true;
+}
+
+void P2PNetwork::recordBlockAttempt(const std::string& peerId, const uint64_t timestampUnix) const {
+    if (timestampUnix > latestObservedBlockTimestampUnix_) {
+        latestObservedBlockTimestampUnix_ = timestampUnix;
+    }
+    blockAttemptTimestampsByPeer_[peerId].push_back(timestampUnix);
+    pruneBlockAttempts(peerId, latestObservedBlockTimestampUnix_);
+}
+
+void P2PNetwork::pruneBlockAttempts(const std::string& peerId, const uint64_t latestTimestampUnix) const {
+    auto attemptsIt = blockAttemptTimestampsByPeer_.find(peerId);
+    if (attemptsIt == blockAttemptTimestampsByPeer_.end()) {
+        return;
+    }
+
+    std::deque<uint64_t>& attempts = attemptsIt->second;
+    while (!attempts.empty()) {
+        const uint64_t oldest = attempts.front();
+        if (oldest > latestTimestampUnix || latestTimestampUnix - oldest <= kBlockAttemptWindowSeconds) {
+            break;
+        }
+        attempts.pop_front();
+    }
+}
+
+uint64_t P2PNetwork::blockAttemptScore(const std::string& peerId) const {
+    pruneBlockAttempts(peerId, latestObservedBlockTimestampUnix_);
+    const auto attemptsIt = blockAttemptTimestampsByPeer_.find(peerId);
+    if (attemptsIt == blockAttemptTimestampsByPeer_.end()) {
+        return 0;
+    }
+    return static_cast<uint64_t>(attemptsIt->second.size());
+}
+
+std::vector<std::string> P2PNetwork::rankedNeighbors(const std::string& peerId) const {
+    const auto adjacencyIt = adjacency_.find(peerId);
+    if (adjacencyIt == adjacency_.end()) {
+        return {};
+    }
+
+    std::vector<std::string> neighbors(adjacencyIt->second.begin(), adjacencyIt->second.end());
+    std::sort(neighbors.begin(), neighbors.end(),
+              [this](const std::string& left, const std::string& right) {
+                  const uint64_t leftScore = blockAttemptScore(left);
+                  const uint64_t rightScore = blockAttemptScore(right);
+                  if (leftScore != rightScore) {
+                      return leftScore > rightScore;
+                  }
+                  return left < right;
+              });
+    return neighbors;
 }
