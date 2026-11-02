@@ -1,0 +1,3 @@
+/home/runner/work/Egechain-bignum-and-encryption/Egechain-bignum-and-encryption/Egechain/build/CMakeFiles/Egechain.dir
+/home/runner/work/Egechain-bignum-and-encryption/Egechain-bignum-and-encryption/Egechain/build/CMakeFiles/edit_cache.dir
+/home/runner/work/Egechain-bignum-and-encryption/Egechain-bignum-and-encryption/Egechain/build/CMakeFiles/rebuild_cache.dir
