@@ -9,4 +9,6 @@ add_executable(Egechain
         LispParser.cpp
         Block.cpp
         LightweightCrypto.cpp
-        Node.cpp)
+        Node.cpp
+        Wallet.cpp
+        Network.cpp)
